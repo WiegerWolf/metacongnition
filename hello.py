@@ -217,6 +217,51 @@ class EnhancedThoughtLibrary:
         self.active_sessions[timestamp] = session
         return session
     
+    def list_sessions(self):
+        """List all available thinking sessions"""
+        sessions = []
+        for session_dir in self.base_dir.glob("*"):
+            if session_dir.is_dir():
+                session_file = session_dir / "session.json"
+                if session_file.exists():
+                    with open(session_file) as f:
+                        data = json.load(f)
+                        sessions.append({
+                            "timestamp": session_dir.name,
+                            "initial_thought": data["initial_thought"],
+                            "total_depths": data.get("total_depths", 0),
+                            "final_tokens": data.get("final_tokens", 0),
+                            "status": data.get("status", "completed")
+                        })
+        return sessions
+    
+    def save_session(self, session: ThoughtSession):
+        """Save a session to disk"""
+        session_dir = self.base_dir / session.timestamp
+        session_dir.mkdir(parents=True, exist_ok=True)
+        
+        with open(session_dir / "session.json", "w") as f:
+            json.dump(session.to_dict(), f, indent=2)
+
+    def get_recent_concepts(self, n: int = 5) -> List[str]:
+        """Get the n most recently added concepts"""
+        concepts = sorted(
+            self.knowledge_graph.graph.nodes(),
+            key=lambda x: self.knowledge_graph.graph.nodes[x]['first_appearance'],
+            reverse=True
+        )
+        return concepts[:n]
+    
+    def get_session(self, timestamp):
+        """Retrieve a specific thinking session"""
+        session_file = self.base_dir / timestamp / "session.json"
+        if session_file.exists():
+            with open(session_file) as f:
+                data = json.load(f)
+                data['timestamp'] = timestamp
+                return data
+        return None
+    
     def pause_session(self, timestamp: str):
         session = self.active_sessions.get(timestamp)
         if session:
@@ -623,12 +668,13 @@ def think(initial_thought: str, library: ThoughtLibrary = None):
     return recursive_think(initial_thought)
 
 if __name__ == "__main__":
-    library = EnhancedThoughtLibrary()  # Use EnhancedThoughtLibrary instead of ThoughtLibrary
+    library = EnhancedThoughtLibrary()
     
     print("\nAvailable thinking sessions:")
     for session in library.list_sessions():
         print(f"Timestamp: {session['timestamp']}")
         print(f"Topic: {session['initial_thought']}")
+        print(f"Status: {session['status']}")
         print(f"Depths: {session['total_depths']}")
         print("-" * 40)
     
@@ -636,7 +682,6 @@ if __name__ == "__main__":
     initial_thought = "How does artificial intelligence change our understanding of consciousness?"
     result = think(initial_thought, library)
     
-    # After thinking completes, update the knowledge graph
     if result:
         print("\nFinal result:", result)
         print("\nUpdating knowledge graph...")
@@ -646,29 +691,32 @@ if __name__ == "__main__":
             timestamp=datetime.now().strftime("%Y%m%d_%H%M%S"),
             initial_thought=initial_thought
         )
-        session.thoughts = library.get_session(session.timestamp)["thoughts"]
-        
-        # Update the knowledge graph
-        library.update_knowledge_graph(session)
-        
-        # Print graph statistics
-        print("\nKnowledge Graph Statistics:")
-        print(f"Number of concepts: {len(library.knowledge_graph.graph.nodes)}")
-        print(f"Number of relationships: {len(library.knowledge_graph.graph.edges)}")
-        
-        # Print some example concepts and their relationships
-        print("\nExample Concepts and Relationships:")
-        for node in list(library.knowledge_graph.graph.nodes)[:5]:  # Show first 5 concepts
-            node_data = library.knowledge_graph.graph.nodes[node]
-            print(f"\nConcept: {node}")
-            print(f"Definition: {node_data['definition']}")
-            print(f"Related concepts: {', '.join(node_data['related_concepts'])}")
-            print(f"Appears in sessions: {', '.join(node_data['sessions'])}")
+        current_session = library.get_session(session.timestamp)
+        if current_session:
+            session.thoughts = current_session["thoughts"]
             
-        # Try getting related concepts for a key concept
-        key_concept = list(library.knowledge_graph.graph.nodes)[0]  # Get first concept
-        related = library.knowledge_graph.get_related_concepts(key_concept)
-        print(f"\nConcepts related to '{key_concept}':")
-        print(', '.join(related))
+            # Update the knowledge graph
+            library.update_knowledge_graph(session)
+            
+            # Print graph statistics
+            print("\nKnowledge Graph Statistics:")
+            print(f"Number of concepts: {len(library.knowledge_graph.graph.nodes)}")
+            print(f"Number of relationships: {len(library.knowledge_graph.graph.edges)}")
+            
+            if library.knowledge_graph.graph.nodes:
+                # Print some example concepts and their relationships
+                print("\nExample Concepts and Relationships:")
+                for node in list(library.knowledge_graph.graph.nodes)[:5]:
+                    node_data = library.knowledge_graph.graph.nodes[node]
+                    print(f"\nConcept: {node}")
+                    print(f"Definition: {node_data['definition']}")
+                    print(f"Related concepts: {', '.join(node_data['related_concepts'])}")
+                    print(f"Appears in sessions: {', '.join(node_data['sessions'])}")
+                    
+                # Try getting related concepts for a key concept
+                key_concept = list(library.knowledge_graph.graph.nodes)[0]
+                related = library.knowledge_graph.get_related_concepts(key_concept)
+                print(f"\nConcepts related to '{key_concept}':")
+                print(', '.join(related))
     else:
         print("\nError: No result generated")
