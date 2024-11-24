@@ -623,10 +623,7 @@ def think(initial_thought: str, library: ThoughtLibrary = None):
     return recursive_think(initial_thought)
 
 if __name__ == "__main__":
-    library = ThoughtLibrary()
-    
-    # Try a new question that builds on both previous sessions
-    initial_thought = "How does artificial intelligence change our understanding of consciousness?"
+    library = EnhancedThoughtLibrary()  # Use EnhancedThoughtLibrary instead of ThoughtLibrary
     
     print("\nAvailable thinking sessions:")
     for session in library.list_sessions():
@@ -635,8 +632,43 @@ if __name__ == "__main__":
         print(f"Depths: {session['total_depths']}")
         print("-" * 40)
     
+    # Create a new thinking session
+    initial_thought = "How does artificial intelligence change our understanding of consciousness?"
     result = think(initial_thought, library)
+    
+    # After thinking completes, update the knowledge graph
     if result:
         print("\nFinal result:", result)
+        print("\nUpdating knowledge graph...")
+        
+        # Convert the completed session to ThoughtSession format
+        session = ThoughtSession(
+            timestamp=datetime.now().strftime("%Y%m%d_%H%M%S"),
+            initial_thought=initial_thought
+        )
+        session.thoughts = library.get_session(session.timestamp)["thoughts"]
+        
+        # Update the knowledge graph
+        library.update_knowledge_graph(session)
+        
+        # Print graph statistics
+        print("\nKnowledge Graph Statistics:")
+        print(f"Number of concepts: {len(library.knowledge_graph.graph.nodes)}")
+        print(f"Number of relationships: {len(library.knowledge_graph.graph.edges)}")
+        
+        # Print some example concepts and their relationships
+        print("\nExample Concepts and Relationships:")
+        for node in list(library.knowledge_graph.graph.nodes)[:5]:  # Show first 5 concepts
+            node_data = library.knowledge_graph.graph.nodes[node]
+            print(f"\nConcept: {node}")
+            print(f"Definition: {node_data['definition']}")
+            print(f"Related concepts: {', '.join(node_data['related_concepts'])}")
+            print(f"Appears in sessions: {', '.join(node_data['sessions'])}")
+            
+        # Try getting related concepts for a key concept
+        key_concept = list(library.knowledge_graph.graph.nodes)[0]  # Get first concept
+        related = library.knowledge_graph.get_related_concepts(key_concept)
+        print(f"\nConcepts related to '{key_concept}':")
+        print(', '.join(related))
     else:
         print("\nError: No result generated")
