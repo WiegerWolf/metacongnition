@@ -295,38 +295,6 @@ class EnhancedThoughtLibrary:
             print(f"Error suggesting new thoughts: {e}")
             return []
 
-    def update_knowledge_graph(self, session: ThoughtSession):
-        """Update knowledge graph with concepts from a session"""
-        for thought in session.thoughts:
-            for concept in thought.get("key_concepts", []):
-                existing_concepts = set(self.knowledge_graph.graph.nodes)
-                
-                if concept not in existing_concepts:
-                    # Get concept definition from model
-                    definition = self._get_concept_definition(
-                        concept, 
-                        thought["thought"]
-                    )
-                    
-                    new_concept = Concept(
-                        name=concept,
-                        first_appearance=session.timestamp,
-                        sessions={session.timestamp},
-                        related_concepts=set(thought["key_concepts"]) - {concept},
-                        definition=definition
-                    )
-                    self.knowledge_graph.add_concept(new_concept)
-                else:
-                    # Update existing concept
-                    node = self.knowledge_graph.graph.nodes[concept]
-                    node["sessions"] = list(set(node["sessions"]) | {session.timestamp})
-                    node["related_concepts"] = list(
-                        set(node["related_concepts"]) | 
-                        set(thought["key_concepts"]) - {concept}
-                    )
-        
-        self.knowledge_graph.save_graph()
-
     def _get_concept_definition(self, concept: str, context: str) -> str:
         """Get a definition for a concept from the model"""
         prompt = f"""Based on this context:
