@@ -443,6 +443,99 @@ class ThoughtProcess:
         
         return summary
 
+def analyze_knowledge_graph(graph: nx.DiGraph):
+    """Analyze the knowledge graph structure and relationships"""
+    print("\nKnowledge Graph Analysis:")
+    
+    # Basic statistics
+    print(f"\nBasic Statistics:")
+    print(f"Number of concepts: {len(graph.nodes)}")
+    print(f"Number of relationships: {len(graph.edges)}")
+    
+    # Most connected concepts
+    degree_centrality = nx.degree_centrality(graph)
+    top_concepts = sorted(degree_centrality.items(), key=lambda x: x[1], reverse=True)[:5]
+    print(f"\nMost Connected Concepts:")
+    for concept, centrality in top_concepts:
+        print(f"{concept}: {centrality:.3f}")
+    
+    # Identify clusters/communities
+    try:
+        communities = nx.community.greedy_modularity_communities(graph.to_undirected())
+        print(f"\nIdentified Concept Clusters:")
+        for i, community in enumerate(communities):
+            print(f"Cluster {i+1}: {', '.join(community)}")
+    except Exception as e:
+        print(f"Could not identify clusters: {e}")
+    
+    # Find central concepts (betweenness centrality)
+    try:
+        betweenness = nx.betweenness_centrality(graph)
+        key_concepts = sorted(betweenness.items(), key=lambda x: x[1], reverse=True)[:5]
+        print(f"\nKey Bridging Concepts:")
+        for concept, centrality in key_concepts:
+            print(f"{concept}: {centrality:.3f}")
+    except Exception as e:
+        print(f"Could not calculate betweenness centrality: {e}")
+
+def visualize_knowledge_graph(graph: nx.DiGraph, highlight_recent=True):
+    """Create an interactive visualization of the knowledge graph"""
+    try:
+        import matplotlib.pyplot as plt
+        import networkx as nx
+        
+        plt.figure(figsize=(15, 10))
+        
+        # Use spring layout for node positioning
+        pos = nx.spring_layout(graph, k=1, iterations=50)
+        
+        # Draw nodes
+        nx.draw_networkx_nodes(
+            graph, pos,
+            node_color='lightblue',
+            node_size=2000,
+            alpha=0.6
+        )
+        
+        # Highlight recent nodes if requested
+        if highlight_recent:
+            recent_nodes = sorted(
+                graph.nodes(),
+                key=lambda x: graph.nodes[x].get('first_appearance', ''),
+                reverse=True
+            )[:5]
+            nx.draw_networkx_nodes(
+                graph, pos,
+                nodelist=recent_nodes,
+                node_color='yellow',
+                node_size=2000,
+                alpha=0.8
+            )
+        
+        # Draw edges
+        nx.draw_networkx_edges(
+            graph, pos,
+            edge_color='gray',
+            arrows=True,
+            arrowsize=20
+        )
+        
+        # Add labels
+        nx.draw_networkx_labels(
+            graph, pos,
+            font_size=8,
+            font_weight='bold'
+        )
+        
+        plt.title("Knowledge Graph Visualization\nYellow nodes are most recent concepts")
+        plt.axis('off')
+        plt.tight_layout()
+        
+        return plt
+    except Exception as e:
+        print(f"Error visualizing graph: {e}")
+        return None
+    
 def update_knowledge_graph(library: EnhancedThoughtLibrary, session: ThoughtSession):
     """Separate function to handle knowledge graph updates"""
     timestamp = session.timestamp
@@ -734,7 +827,8 @@ if __name__ == "__main__":
     print("\nFinding related concepts from previous sessions...")
     related_concepts = library.find_related_concepts(initial_thought)
     if related_concepts:
-        print("Related concepts:", ", ".join(related_concepts))    
+        print("Related concepts:", ", ".join(related_concepts))
+    
     # Run thinking process and get both result and thought_process
     result, thought_process = think(initial_thought, library)
     
@@ -747,7 +841,7 @@ if __name__ == "__main__":
         
         # Create a new ThoughtSession with the thoughts
         session = ThoughtSession(timestamp, initial_thought)
-        session.thoughts = thought_process.thoughts  # Now this should contain the thoughts
+        session.thoughts = thought_process.thoughts
         
         # Save the session
         library.save_session(session)
@@ -755,19 +849,61 @@ if __name__ == "__main__":
         print("\nExtracting concepts from session...")
         print(f"Number of thoughts: {len(session.thoughts)}")
         
-        # Update knowledge graph
-        graph = update_knowledge_graph(library, session)
+        # Extract concepts and update knowledge graph
+        all_concepts = set()
+        concept_definitions = {}
         
-        # Print graph statistics
-        print("\nKnowledge Graph Statistics:")
-        print(f"Number of concepts: {len(graph.graph.nodes)}")
-        print(f"Number of relationships: {len(graph.graph.edges)}")
+        # First pass: collect all concepts and their contexts
+        for thought in session.thoughts:
+            print(f"\nProcessing thought at depth {thought['depth']}:")
+            concepts = thought.get('key_concepts', [])
+            print(f"Key concepts: {', '.join(concepts)}")
+            
+            all_concepts.update(concepts)
+            
+            # Get definitions for new concepts
+            for concept in concepts:
+                if concept not in concept_definitions:
+                    print(f"Getting definition for: {concept}")
+                    concept_definitions[concept] = library._get_concept_definition(
+                        concept,
+                        thought['thought']
+                    )
         
-        if graph.graph.nodes:
-            print("\nExample Concepts:")
-            for node in list(graph.graph.nodes)[:5]:
-                print(f"\nConcept: {node}")
-                node_data = graph.graph.nodes[node]
-                print(f"Definition: {node_data.get('definition', 'No definition available')}")
-                print(f"Related concepts: {', '.join(node_data.get('related_concepts', []))}")
-                print(f"Appears in sessions: {', '.join(node_data.get('sessions', []))}")
+        # Second pass: create or update concepts
+        for concept in all_concepts:
+            related_concepts = all_concepts - {concept}
+            
+            if concept not in library.knowledge_graph.graph:
+                print(f"\nAdding new concept: {concept}")
+                new_concept = Concept(
+                    name=concept,
+                    first_appearance=timestamp,
+                    sessions={timestamp},
+                    related_concepts=related_concepts,
+                    definition=concept_definitions.get(concept, "")
+                )
+                library.knowledge_graph.add_concept(new_concept)
+            else:
+                print(f"\nUpdating existing concept: {concept}")
+                node = library.knowledge_graph.graph.nodes[concept]
+                node['sessions'] = list(set(node['sessions']) | {timestamp})
+                node['related_concepts'] = list(
+                    set(node['related_concepts']) | related_concepts
+                )
+        
+        # Save the updated graph
+        library.knowledge_graph.save_graph()
+        
+        # Analyze the knowledge graph
+        analyze_knowledge_graph(library.knowledge_graph.graph)
+        
+        # Offer visualization
+        print("\nWould you like to visualize the knowledge graph? (y/n)")
+        try:
+            if input().lower() == 'y':
+                plt = visualize_knowledge_graph(library.knowledge_graph.graph)
+                if plt:
+                    plt.show()
+        except Exception as e:
+            print(f"Error showing visualization: {e}")
