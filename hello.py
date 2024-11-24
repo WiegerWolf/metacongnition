@@ -137,13 +137,12 @@ def think(initial_thought: str, library: ThoughtLibrary = None):
                 for session in related_sessions:
                     context_text += f"\nFrom session {session['timestamp']}:\n"
                     context_text += f"Topic: {session['initial_thought']}\n"
-                    if session['thoughts']:
+                    if session.get('thoughts'):  # Use .get() to avoid KeyError
                         final_thought = session['thoughts'][-1]
                         context_text += f"Final conclusion: {final_thought['thought']}\n"
                         context_text += f"Key concepts: {', '.join(final_thought.get('key_concepts', []))}\n"
                 
                 context.append({"role": "user", "content": context_text})
-        
         tools = [
             {
                 "name": "continue_thinking",
@@ -189,53 +188,62 @@ def think(initial_thought: str, library: ThoughtLibrary = None):
                         }
                     },
                     "required": ["current_thought", "needs_more_thinking", "next_thought", "reasoning", 
-                               "key_concepts", "referenced_insights"]
+                            "key_concepts", "referenced_insights"]
                 }
             }
         ]
-
+        # Add the current thought to context
         context.append({"role": "user", "content": f"Depth {depth}: {thought}\nPlease think about this deeply and decide if more thinking is needed."})
         
-        message = client.messages.create(
-            model="claude-3-5-sonnet-20241022",
-            max_tokens=1000,
-            messages=context,
-            tools=tools
-        )
-        
-        total_tokens += message.usage.input_tokens + message.usage.output_tokens
-        print(f"Depth {depth} response (Total tokens: {total_tokens}):", message.content)
-        
-        for content in message.content:
-            if content.type == "tool_use":
-                tool_response = content.input
-                tool_response["tokens_at_depth"] = message.usage.input_tokens + message.usage.output_tokens
-                tool_response["total_tokens"] = total_tokens
-                
-                print(f"Reasoning at depth {depth}: {tool_response['reasoning']}")
-                print(f"Key concepts at depth {depth}: {', '.join(tool_response['key_concepts'])}")
-                if tool_response['referenced_insights']:
-                    print(f"Referenced insights at depth {depth}:")
-                    for ref in tool_response['referenced_insights']:
-                        print(f"- From {ref['session']}: {ref['insight']}")
-                
-                thought_process.add_thought(depth, tool_response)
-                
-                if tool_response["needs_more_thinking"]:
-                    return recursive_think(tool_response["next_thought"], depth + 1, context, total_tokens)
-                else:
-                    thought_process.save_session()
-                    summary = thought_process.generate_summary()
-                    print("\nThought Evolution Summary:")
-                    print(summary)
-                    return f"Thought process complete.\nFinal thought: {tool_response['next_thought']}\nReasoning: {tool_response['reasoning']}"
-        
-        return message.content[0].text
+        try:
+            message = client.messages.create(
+                model="claude-3-5-sonnet-20241022",
+                max_tokens=1000,
+                messages=context,
+                tools=tools
+            )
+            
+            total_tokens += message.usage.input_tokens + message.usage.output_tokens
+            print(f"\nDepth {depth} response (Total tokens: {total_tokens}):")
+            
+            # Handle the response
+            for content in message.content:
+                if content.type == "tool_use":
+                    tool_response = content.input
+                    tool_response["tokens_at_depth"] = message.usage.input_tokens + message.usage.output_tokens
+                    tool_response["total_tokens"] = total_tokens
+                    
+                    print(f"\nReasoning at depth {depth}: {tool_response['reasoning']}")
+                    print(f"Key concepts at depth {depth}: {', '.join(tool_response['key_concepts'])}")
+                    if tool_response.get('referenced_insights'):
+                        print(f"Referenced insights at depth {depth}:")
+                        for ref in tool_response['referenced_insights']:
+                            print(f"- From {ref['session']}: {ref['insight']}")
+                    
+                    thought_process.add_thought(depth, tool_response)
+                    
+                    if tool_response["needs_more_thinking"]:
+                        return recursive_think(tool_response["next_thought"], depth + 1, context, total_tokens)
+                    else:
+                        thought_process.save_session()
+                        summary = thought_process.generate_summary()
+                        print("\nThought Evolution Summary:")
+                        print(summary)
+                        return f"Thought process complete.\nFinal thought: {tool_response['next_thought']}\nReasoning: {tool_response['reasoning']}"
+                elif content.type == "text":
+                    print(f"Text response: {content.text}")
+            
+            # If we get here without returning, something went wrong
+            print("Warning: No tool response received")
+            return "Thinking process incomplete - no tool response received"
+            
+        except Exception as e:
+            print(f"Error during thinking process: {e}")
+            return f"Error occurred: {str(e)}"
 
 if __name__ == "__main__":
     library = ThoughtLibrary()
     
-    # List available sessions
     print("\nAvailable thinking sessions:")
     for session in library.list_sessions():
         print(f"Timestamp: {session['timestamp']}")
