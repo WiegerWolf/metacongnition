@@ -492,7 +492,8 @@ class ThoughtProcess:
         return summary
     
     def add_thought(self, depth: int, thought: Dict):
-        self.thoughts.append({
+        # Ensure all required fields are present
+        structured_thought = {
             "depth": depth,
             "thought": thought["current_thought"],
             "needs_more_thinking": thought["needs_more_thinking"],
@@ -501,8 +502,10 @@ class ThoughtProcess:
             "tokens_at_depth": thought.get("tokens_at_depth", 0),
             "total_tokens": thought.get("total_tokens", 0),
             "key_concepts": thought.get("key_concepts", []),
-            "referenced_insights": thought.get("referenced_insights", [])
-        })
+            "referenced_insights": thought.get("referenced_insights", []),
+            "concrete_applications": thought.get("concrete_applications", [])  # Add this
+        }
+        self.thoughts.append(structured_thought)
         
     def save_session(self):
         session_data = {
@@ -745,10 +748,7 @@ if __name__ == "__main__":
         print("\nFinal result:", result)
         print("\nUpdating knowledge graph...")
         
-        # Get the current timestamp
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        
-        # Create a new ThoughtSession
         session = ThoughtSession(timestamp, initial_thought)
         session.thoughts = thought_process.thoughts
         
@@ -756,33 +756,47 @@ if __name__ == "__main__":
         library.save_session(session)
         
         print("\nExtracting concepts from session...")
+        all_concepts = set()
+        concept_definitions = {}
+        
+        # First pass: collect all concepts and their contexts
         for thought in session.thoughts:
             print(f"\nProcessing thought at depth {thought['depth']}:")
-            print(f"Key concepts: {', '.join(thought.get('key_concepts', []))}")
+            concepts = thought.get('key_concepts', [])
+            print(f"Key concepts: {', '.join(concepts)}")
             
-            # Create concepts for each key concept
-            for concept in thought.get('key_concepts', []):
-                if concept not in library.knowledge_graph.graph:
-                    print(f"Adding new concept: {concept}")
-                    new_concept = Concept(
-                        name=concept,
-                        first_appearance=timestamp,
-                        sessions={timestamp},
-                        related_concepts=set(thought['key_concepts']) - {concept},
-                        definition=library._get_concept_definition(
-                            concept,
-                            thought['thought']
-                        )
+            all_concepts.update(concepts)
+            
+            # Get definitions for new concepts
+            for concept in concepts:
+                if concept not in concept_definitions:
+                    print(f"Getting definition for: {concept}")
+                    concept_definitions[concept] = library._get_concept_definition(
+                        concept,
+                        thought['thought']
                     )
-                    library.knowledge_graph.add_concept(new_concept)
-                else:
-                    print(f"Updating existing concept: {concept}")
-                    node = library.knowledge_graph.graph.nodes[concept]
-                    node['sessions'] = list(set(node['sessions']) | {timestamp})
-                    node['related_concepts'] = list(
-                        set(node['related_concepts']) | 
-                        (set(thought['key_concepts']) - {concept})
-                    )
+        
+        # Second pass: create or update concepts with all related information
+        for concept in all_concepts:
+            related_concepts = all_concepts - {concept}
+            
+            if concept not in library.knowledge_graph.graph:
+                print(f"Adding new concept: {concept}")
+                new_concept = Concept(
+                    name=concept,
+                    first_appearance=timestamp,
+                    sessions={timestamp},
+                    related_concepts=related_concepts,
+                    definition=concept_definitions.get(concept, "")
+                )
+                library.knowledge_graph.add_concept(new_concept)
+            else:
+                print(f"Updating existing concept: {concept}")
+                node = library.knowledge_graph.graph.nodes[concept]
+                node['sessions'] = list(set(node['sessions']) | {timestamp})
+                node['related_concepts'] = list(
+                    set(node['related_concepts']) | related_concepts
+                )
         
         # Save the updated knowledge graph
         library.knowledge_graph.save_graph()
@@ -800,26 +814,5 @@ if __name__ == "__main__":
                 print(f"Definition: {node_data.get('definition', 'No definition available')}")
                 print(f"Related concepts: {', '.join(node_data.get('related_concepts', []))}")
                 print(f"Appears in sessions: {', '.join(node_data.get('sessions', []))}")
-            
-            # Offer visualization
-            print("\nWould you like to visualize the knowledge graph? (y/n)")
-            try:
-                if input().lower() == 'y':
-                    import matplotlib.pyplot as plt
-                    plt.figure(figsize=(12, 8))
-                    pos = nx.spring_layout(library.knowledge_graph.graph)
-                    nx.draw(
-                        library.knowledge_graph.graph,
-                        pos,
-                        with_labels=True,
-                        node_color='lightblue',
-                        node_size=2000,
-                        font_size=8,
-                        font_weight='bold'
-                    )
-                    plt.title("Knowledge Graph Visualization")
-                    plt.show()
-            except Exception as e:
-                print(f"Error visualizing graph: {e}")
     else:
         print("\nError: No result generated")
