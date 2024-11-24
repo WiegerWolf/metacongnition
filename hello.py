@@ -399,7 +399,7 @@ class ThoughtProcess:
             "reasoning": thought["reasoning"],
             "tokens_at_depth": thought.get("tokens_at_depth", 0),
             "total_tokens": thought.get("total_tokens", 0),
-            "key_concepts": thought.get("key_concepts", []),
+            "key_concepts": thought.get("key_concepts", []),  # Make sure this is captured
             "referenced_insights": thought.get("referenced_insights", []),
             "concrete_applications": thought.get("concrete_applications", [])
         }
@@ -451,32 +451,49 @@ def update_knowledge_graph(library: EnhancedThoughtLibrary, session: ThoughtSess
     concept_relationships = {}
     
     print("\nExtracting concepts from session...")
+    print(f"Number of thoughts: {len(session.thoughts)}")
+    
+    # Debug print of thought structure
+    for i, thought in enumerate(session.thoughts):
+        print(f"\nThought {i} structure:")
+        for key, value in thought.items():
+            print(f"{key}: {value}")
     
     # First pass: collect all concepts and their contexts
     for thought in session.thoughts:
         depth = thought.get('depth', 0)
-        concepts = thought.get('key_concepts', [])
+        # Get key_concepts from the thought content
+        key_concepts = []
+        
+        # Try to get key_concepts from different possible locations
+        if 'key_concepts' in thought:
+            key_concepts = thought['key_concepts']
+        elif isinstance(thought.get('thought'), dict) and 'key_concepts' in thought['thought']:
+            key_concepts = thought['thought']['key_concepts']
+            
         print(f"\nProcessing thought at depth {depth}:")
-        print(f"Key concepts: {', '.join(concepts)}")
+        print(f"Key concepts found: {', '.join(key_concepts)}")
         
         # Update all_concepts set
-        all_concepts.update(concepts)
+        all_concepts.update(key_concepts)
         
         # Build relationships between concepts in the same thought
-        for concept in concepts:
+        for concept in key_concepts:
             if concept not in concept_relationships:
                 concept_relationships[concept] = set()
-            concept_relationships[concept].update(set(concepts) - {concept})
+            concept_relationships[concept].update(set(key_concepts) - {concept})
             
             # Get definition if we don't have it yet
             if concept not in concept_definitions:
                 print(f"Getting definition for: {concept}")
-                concept_definitions[concept] = library._get_concept_definition(
+                definition = library._get_concept_definition(
                     concept,
-                    thought['thought']
+                    thought.get('thought', '')
                 )
+                concept_definitions[concept] = definition
     
     print(f"\nTotal concepts found: {len(all_concepts)}")
+    print(f"Concepts: {', '.join(all_concepts)}")
     
     # Second pass: create or update concepts in the graph
     for concept in all_concepts:
