@@ -743,36 +743,68 @@ if __name__ == "__main__":
         print("\nFinal result:", result)
         print("\nUpdating knowledge graph...")
         
-        # Create a new session with the current timestamp
+        # Get the current timestamp
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        
+        # Create a new ThoughtSession
         session = ThoughtSession(timestamp, initial_thought)
         
-        # Get the session data that was just created
-        session_data = library.get_session(timestamp)
-        if session_data and 'thoughts' in session_data:
-            session.thoughts = session_data['thoughts']
+        # Add the thoughts from the thinking process
+        session.thoughts = thought_process.thoughts  # Use the thoughts from our ThoughtProcess
+        
+        # Save the session first
+        library.save_session(session)
+        
+        # Now update the knowledge graph
+        print("\nExtracting concepts from session...")
+        for thought in session.thoughts:
+            print(f"\nProcessing thought at depth {thought['depth']}:")
+            print(f"Key concepts: {', '.join(thought['key_concepts'])}")
             
-            # Update the knowledge graph
-            library.update_knowledge_graph(session)
+            # Create concepts for each key concept
+            for concept in thought['key_concepts']:
+                if concept not in library.knowledge_graph.graph:
+                    print(f"Adding new concept: {concept}")
+                    new_concept = Concept(
+                        name=concept,
+                        first_appearance=timestamp,
+                        sessions={timestamp},
+                        related_concepts=set(thought['key_concepts']) - {concept},
+                        definition=library._get_concept_definition(
+                            concept,
+                            thought['thought']
+                        )
+                    )
+                    library.knowledge_graph.add_concept(new_concept)
+                else:
+                    print(f"Updating existing concept: {concept}")
+                    node = library.knowledge_graph.graph.nodes[concept]
+                    node['sessions'] = list(set(node['sessions']) | {timestamp})
+                    node['related_concepts'] = list(
+                        set(node['related_concepts']) | 
+                        (set(thought['key_concepts']) - {concept})
+                    )
+        
+        # Save the updated knowledge graph
+        library.knowledge_graph.save_graph()
+        
+        # Print graph statistics
+        print("\nKnowledge Graph Statistics:")
+        print(f"Number of concepts: {len(library.knowledge_graph.graph.nodes)}")
+        print(f"Number of relationships: {len(library.knowledge_graph.graph.edges)}")
+        
+        if library.knowledge_graph.graph.nodes:
+            print("\nExample Concepts:")
+            for node in list(library.knowledge_graph.graph.nodes)[:5]:
+                print(f"\nConcept: {node}")
+                node_data = library.knowledge_graph.graph.nodes[node]
+                print(f"Definition: {node_data.get('definition', 'No definition available')}")
+                print(f"Related concepts: {', '.join(node_data.get('related_concepts', []))}")
+                print(f"Appears in sessions: {', '.join(node_data.get('sessions', []))}")
             
-            # Print graph statistics
-            print("\nKnowledge Graph Statistics:")
-            print(f"Number of concepts: {len(library.knowledge_graph.graph.nodes)}")
-            print(f"Number of relationships: {len(library.knowledge_graph.graph.edges)}")
-            
-            # Print concept details
-            if library.knowledge_graph.graph.nodes:
-                print("\nConcepts in Knowledge Graph:")
-                for node in list(library.knowledge_graph.graph.nodes)[:5]:  # Show first 5 concepts
-                    print(f"\nConcept: {node}")
-                    node_data = library.knowledge_graph.graph.nodes[node]
-                    print(f"Definition: {node_data.get('definition', 'No definition available')}")
-                    print(f"First appearance: {node_data.get('first_appearance', 'Unknown')}")
-                    print(f"Related concepts: {', '.join(node_data.get('related_concepts', []))}")
-                    print(f"Appears in sessions: {', '.join(node_data.get('sessions', []))}")
-                
-                # Visualize a small part of the graph
-                print("\nWould you like to visualize the knowledge graph? (y/n)")
+            # Offer visualization
+            print("\nWould you like to visualize the knowledge graph? (y/n)")
+            try:
                 if input().lower() == 'y':
                     import matplotlib.pyplot as plt
                     plt.figure(figsize=(12, 8))
@@ -788,5 +820,7 @@ if __name__ == "__main__":
                     )
                     plt.title("Knowledge Graph Visualization")
                     plt.show()
-        else:
-            print("Error: Session data not found or invalid")
+            except Exception as e:
+                print(f"Error visualizing graph: {e}")
+    else:
+        print("\nError: No result generated")
