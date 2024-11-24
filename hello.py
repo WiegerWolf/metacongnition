@@ -80,21 +80,30 @@ class ThoughtLibrary:
             
             # Clean the response text to ensure it's valid JSON
             response_text = response.content[0].text.strip()
-            # Remove any additional text before or after the JSON array
             if '[' in response_text and ']' in response_text:
                 json_str = response_text[response_text.find('['):response_text.rfind(']')+1]
                 related_timestamps = json.loads(json_str)
-                return [self.get_session(ts) for ts in related_timestamps]
+                related_sessions = []
+                for ts in related_timestamps:
+                    session = self.get_session(ts)
+                    if session:  # Only add if session was found
+                        related_sessions.append(session)
+                return related_sessions
             return []
         except Exception as e:
             print(f"Error finding related sessions: {e}")
+            print(f"Response text was: {response_text}")
             return []
 
     def get_session(self, timestamp):
+        """Retrieve a specific thinking session and include its timestamp"""
         session_file = self.base_dir / timestamp / "session.json"
         if session_file.exists():
             with open(session_file) as f:
-                return json.load(f)
+                session_data = json.load(f)
+                # Add the timestamp to the session data
+                session_data['timestamp'] = timestamp
+                return session_data
         return None
 
 class ThoughtProcess:
@@ -243,11 +252,16 @@ def think(initial_thought: str, library: ThoughtLibrary = None):
             if related_sessions:
                 context_text = "Before thinking about this topic, consider these relevant previous sessions:\n"
                 for session in related_sessions:
-                    context_text += f"\nFrom session {session['timestamp']}:\n"
-                    context_text += f"Topic: {session['initial_thought']}\n"
-                    if session.get('thoughts'):
-                        final_thought = session['thoughts'][-1]
-                        context_text += f"Final conclusion: {final_thought['thought']}\n"
+                    # Add error checking for session structure
+                    timestamp = session.get('timestamp', 'Unknown timestamp')
+                    initial_thought = session.get('initial_thought', 'Unknown topic')
+                    thoughts = session.get('thoughts', [])
+                    
+                    context_text += f"\nFrom session {timestamp}:\n"
+                    context_text += f"Topic: {initial_thought}\n"
+                    if thoughts:  # Only add if there are thoughts
+                        final_thought = thoughts[-1]
+                        context_text += f"Final conclusion: {final_thought.get('thought', 'No conclusion available')}\n"
                         context_text += f"Key concepts: {', '.join(final_thought.get('key_concepts', []))}\n"
                 
                 context.append({"role": "user", "content": context_text})
