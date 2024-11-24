@@ -6,6 +6,10 @@ import json
 from pathlib import Path
 import glob
 
+client = anthropic.Anthropic(
+    api_key=os.environ["ANTHROPIC_API_KEY"],
+)
+
 class ThoughtLibrary:
     def __init__(self, base_dir="thought_sessions"):
         self.base_dir = Path(base_dir)
