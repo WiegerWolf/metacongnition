@@ -30,6 +30,33 @@ class ThoughtLibrary:
                         })
         return sessions
     
+    def find_related_sessions(self, query):
+        """Find sessions related to a given query/topic"""
+        sessions = self.list_sessions()
+        if not sessions:
+            return []
+        
+        messages = [
+            {"role": "user", "content": f"""Given this query: '{query}'
+             Please analyze these previous thinking sessions and identify which might be relevant.
+             Return your response as a JSON array of timestamp strings.
+             Previous sessions:
+             {json.dumps(sessions, indent=2)}"""}
+        ]
+        
+        response = client.messages.create(
+            model="claude-3-5-sonnet-20241022",
+            max_tokens=1000,
+            messages=messages
+        )
+        
+        try:
+            related_timestamps = json.loads(response.content[0].text)
+            return [self.get_session(ts) for ts in related_timestamps]
+        except Exception as e:
+            print(f"Error finding related sessions: {e}")
+            return []
+        
     def get_session(self, timestamp):
         session_file = self.base_dir / timestamp / "session.json"
         if session_file.exists():
@@ -98,20 +125,24 @@ def think(initial_thought: str, library: ThoughtLibrary = None):
         
     thought_process = ThoughtProcess(initial_thought, library)
     
-    # Get previous sessions
-    previous_sessions = library.list_sessions()
+    # Get related sessions
+    related_sessions = library.find_related_sessions(initial_thought)
     
     def recursive_think(thought: str, depth: int = 0, context: List[Dict] = None, total_tokens: int = 0):
         if context is None:
             context = []
-            # Add context about previous sessions
-            if previous_sessions:
-                context.append({
-                    "role": "user",
-                    "content": f"Before thinking about this topic, consider these previous thinking sessions:\n" +
-                              "\n".join([f"Session: {s['timestamp']}, Topic: {s['initial_thought']}" 
-                                       for s in previous_sessions])
-                })
+            # Add context about related sessions
+            if related_sessions:
+                context_text = "Before thinking about this topic, consider these relevant previous sessions:\n"
+                for session in related_sessions:
+                    context_text += f"\nFrom session {session['timestamp']}:\n"
+                    context_text += f"Topic: {session['initial_thought']}\n"
+                    if session['thoughts']:
+                        final_thought = session['thoughts'][-1]
+                        context_text += f"Final conclusion: {final_thought['thought']}\n"
+                        context_text += f"Key concepts: {', '.join(final_thought.get('key_concepts', []))}\n"
+                
+                context.append({"role": "user", "content": context_text})
         
         tools = [
             {
@@ -202,6 +233,19 @@ def think(initial_thought: str, library: ThoughtLibrary = None):
         return message.content[0].text
 
 if __name__ == "__main__":
+    library = ThoughtLibrary()
+    
+    # List available sessions
+    print("\nAvailable thinking sessions:")
+    for session in library.list_sessions():
+        print(f"Timestamp: {session['timestamp']}")
+        print(f"Topic: {session['initial_thought']}")
+        print(f"Depths: {session['total_depths']}")
+        print("-" * 40)
+    
     initial_thought = "Can artificial intelligence have free will?"
-    result = think(initial_thought)
-    print("\nFinal result:", result)
+    result = think(initial_thought, library)
+    if result:
+        print("\nFinal result:", result)
+    else:
+        print("\nError: No result generated")
