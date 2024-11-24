@@ -118,8 +118,89 @@ def think(initial_thought: str, library: ThoughtLibrary = None):
                     "content": f"Before you start thinking about this topic, here is relevant context from previous thinking sessions:\n{previous_context}"
                 })
         
-        # Rest of the recursive_think function remains the same...
-        # [Previous code here]
+        # Check token limit (leaving some room for response)
+        MAX_TOKENS = 150000  # Setting lower than 200k to be safe
+        if total_tokens > MAX_TOKENS:
+            return f"Token limit ({MAX_TOKENS}) reached. Final thought: {thought}"
+        
+        tools = [
+            {
+                "name": "continue_thinking",
+                "description": """
+                A tool for recursive self-reflection and deep thinking about a given topic.
+                Use this tool when you need to explore a thought more deeply or when the current analysis feels incomplete.
+                Return false for needs_more_thinking when you feel the thought has been fully explored or a satisfactory conclusion reached.
+                Consider both depth and breadth of analysis when deciding if more thinking is needed.
+                Track key concepts and their evolution through the thinking process.
+                """,
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "current_thought": {
+                            "type": "string",
+                            "description": "The current thought being processed"
+                        },
+                        "needs_more_thinking": {
+                            "type": "boolean",
+                            "description": "Whether this thought needs more processing"
+                        },
+                        "next_thought": {
+                            "type": "string",
+                            "description": "The next evolution of this thought, if more thinking is needed"
+                        },
+                        "reasoning": {
+                            "type": "string",
+                            "description": "Explanation for why more thinking is or isn't needed"
+                        },
+                        "key_concepts": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Main concepts explored in this thought"
+                        }
+                    },
+                    "required": ["current_thought", "needs_more_thinking", "next_thought", "reasoning", "key_concepts"]
+                }
+            }
+        ]
+
+        context.append({"role": "user", "content": f"Depth {depth}: {thought}\nPlease think about this deeply and decide if more thinking is needed."})
+        
+        current_tokens = count_tokens(context)
+        print(f"Current token count: {current_tokens}")
+        
+        message = client.messages.create(
+            model="claude-3-5-sonnet-20241022",
+            max_tokens=1000,
+            messages=context,
+            tools=tools
+        )
+        
+        total_tokens += message.usage.input_tokens + message.usage.output_tokens
+        print(f"Depth {depth} response (Total tokens: {total_tokens}):", message.content)
+        
+        for content in message.content:
+            if content.type == "tool_use":
+                tool_response = content.input
+                tool_response["tokens_at_depth"] = message.usage.input_tokens + message.usage.output_tokens
+                tool_response["total_tokens"] = total_tokens
+                
+                print(f"Reasoning at depth {depth}: {tool_response['reasoning']}")
+                print(f"Key concepts at depth {depth}: {', '.join(tool_response['key_concepts'])}")
+                
+                thought_process.add_thought(depth, tool_response)
+                
+                if tool_response["needs_more_thinking"]:
+                    return recursive_think(tool_response["next_thought"], depth + 1, context, total_tokens)
+                else:
+                    thought_process.save_session()
+                    summary = thought_process.generate_summary()
+                    print("\nThought Evolution Summary:")
+                    print(summary)
+                    return f"Thought process complete.\nFinal thought: {tool_response['next_thought']}\nReasoning: {tool_response['reasoning']}"
+        
+        return message.content[0].text
+
+    return recursive_think(initial_thought)
 
 if __name__ == "__main__":
     library = ThoughtLibrary()
