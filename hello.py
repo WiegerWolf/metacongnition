@@ -667,7 +667,24 @@ def think(initial_thought: str, library: EnhancedThoughtLibrary = None):
                     tool_response["tokens_at_depth"] = message.usage.input_tokens + message.usage.output_tokens
                     tool_response["total_tokens"] = total_tokens
                     
-                    # Calculate metrics without additional API call
+                    # Store the complete thought data
+                    thought_data = {
+                        "depth": depth,
+                        "thought": tool_response["current_thought"],
+                        "needs_more_thinking": tool_response["needs_more_thinking"],
+                        "next_thought": tool_response["next_thought"],
+                        "reasoning": tool_response["reasoning"],
+                        "tokens_at_depth": tool_response["tokens_at_depth"],
+                        "total_tokens": tool_response["total_tokens"],
+                        "key_concepts": tool_response["key_concepts"],
+                        "referenced_insights": tool_response["referenced_insights"],
+                        "concrete_applications": tool_response["concrete_applications"]
+                    }
+                    
+                    # Add the thought to the process
+                    thought_process.thoughts.append(thought_data)
+                    
+                    # Calculate metrics
                     metrics = thought_process.calculate_metrics(tool_response, depth)
                     if metrics:
                         print(f"\nMetrics for depth {depth}:")
@@ -677,8 +694,6 @@ def think(initial_thought: str, library: EnhancedThoughtLibrary = None):
                     print(f"Key concepts at depth {depth}: {', '.join(tool_response['key_concepts'])}")
                     if tool_response.get('concrete_applications'):
                         print(f"Concrete applications at depth {depth}: {', '.join(tool_response['concrete_applications'])}")
-                    
-                    thought_process.add_thought(depth, tool_response)
                     
                     if tool_response["needs_more_thinking"]:
                         return recursive_think(tool_response["next_thought"], depth + 1, context, total_tokens)
@@ -691,7 +706,6 @@ def think(initial_thought: str, library: EnhancedThoughtLibrary = None):
                 elif content.type == "text":
                     print(f"Text response: {content.text}")
             
-            # If we get here without returning, something went wrong
             print("Warning: No tool response received")
             return "Thinking process incomplete - no tool response received"
             
@@ -699,7 +713,8 @@ def think(initial_thought: str, library: EnhancedThoughtLibrary = None):
             print(f"Error during thinking process: {e}")
             return f"Error occurred: {str(e)}"
 
-    return recursive_think(initial_thought)
+    result = recursive_think(initial_thought)
+    return result, thought_process  # Return both the result and the thought process
 
 if __name__ == "__main__":
     library = EnhancedThoughtLibrary()
@@ -719,21 +734,26 @@ if __name__ == "__main__":
     print("\nFinding related concepts from previous sessions...")
     related_concepts = library.find_related_concepts(initial_thought)
     if related_concepts:
-        print("Related concepts:", ", ".join(related_concepts))
-    
-    # Create ThoughtProcess instance and run thinking
-    thought_process = ThoughtProcess(initial_thought, library)
-    result = think(initial_thought, library)
+        print("Related concepts:", ", ".join(related_concepts))    
+    # Run thinking process and get both result and thought_process
+    result, thought_process = think(initial_thought, library)
     
     if result:
         print("\nFinal result:", result)
         print("\nUpdating knowledge graph...")
         
-        # Create and save session
+        # Get the current timestamp
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        
+        # Create a new ThoughtSession with the thoughts
         session = ThoughtSession(timestamp, initial_thought)
-        session.thoughts = thought_process.thoughts
+        session.thoughts = thought_process.thoughts  # Now this should contain the thoughts
+        
+        # Save the session
         library.save_session(session)
+        
+        print("\nExtracting concepts from session...")
+        print(f"Number of thoughts: {len(session.thoughts)}")
         
         # Update knowledge graph
         graph = update_knowledge_graph(library, session)
