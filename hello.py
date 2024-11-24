@@ -1,13 +1,40 @@
 import os
 import anthropic
-from typing import List, Dict
 from datetime import datetime
 import json
 from pathlib import Path
+from typing import List, Dict, Tuple
+from dataclasses import dataclass
+import numpy as np
 
 client = anthropic.Anthropic(
     api_key=os.environ["ANTHROPIC_API_KEY"],
 )
+
+@dataclass
+class ThinkingMetrics:
+    depth: int
+    abstractness_score: float  # 0-1, lower is more concrete
+    novelty_score: float      # 0-1, higher means more new concepts
+    coherence_score: float    # 0-1, higher means better connection to previous thoughts
+    practical_score: float    # 0-1, higher means more actionable insights
+    
+    def __str__(self):
+        return f"""Depth {self.depth} Metrics:
+        Abstractness: {self.abstractness_score:.2f} (lower is better)
+        Novelty: {self.novelty_score:.2f}
+        Coherence: {self.coherence_score:.2f}
+        Practical Value: {self.practical_score:.2f}
+        Overall Quality: {self.overall_quality:.2f}"""
+    
+    @property
+    def overall_quality(self) -> float:
+        return np.mean([
+            1 - self.abstractness_score,  # Convert to concreteness
+            self.novelty_score,
+            self.coherence_score,
+            self.practical_score
+        ])
 
 class ThoughtLibrary:
     def __init__(self, base_dir="thought_sessions"):
@@ -80,7 +107,79 @@ class ThoughtProcess:
         self.session_dir.mkdir(parents=True, exist_ok=True)
         self.library = library or ThoughtLibrary()
         self.referenced_sessions = {}
+        self.metrics = []
+        self.concept_history = set()
+
+    def calculate_metrics(self, thought: Dict, depth: int) -> ThinkingMetrics:
+        # Get LLM to evaluate the thought quality
+        evaluation_prompt = {
+            "role": "user",
+            "content": f"""Evaluate the following thought in terms of:
+            1. Abstractness (0-1, lower means more concrete)
+            2. Novelty (0-1, higher means more new concepts)
+            3. Coherence (0-1, higher means better connected to previous thoughts)
+            4. Practical Value (0-1, higher means more actionable insights)
+            
+            Thought: {thought['current_thought']}
+            Reasoning: {thought['reasoning']}
+            Key Concepts: {', '.join(thought['key_concepts'])}
+            Concrete Applications: {', '.join(thought.get('concrete_applications', []))}
+            
+            Return your evaluation as a JSON object with these exact keys:
+            {{"abstractness": float, "novelty": float, "coherence": float, "practical_value": float}}"""
+        }
         
+        try:
+            response = client.messages.create(
+                model="claude-3-5-sonnet-20241022",
+                max_tokens=1000,
+                messages=[evaluation_prompt]
+            )
+            
+            metrics_dict = json.loads(response.content[0].text)
+            metrics = ThinkingMetrics(
+                depth=depth,
+                abstractness_score=metrics_dict["abstractness"],
+                novelty_score=metrics_dict["novelty"],
+                coherence_score=metrics_dict["coherence"],
+                practical_score=metrics_dict["practical_value"]
+            )
+            
+            self.metrics.append(metrics)
+            return metrics
+            
+        except Exception as e:
+            print(f"Error calculating metrics: {e}")
+            return None
+    
+    def generate_metrics_summary(self) -> str:
+        if not self.metrics:
+            return "No metrics available"
+            
+        summary = "Thinking Quality Metrics:\n\n"
+        
+        # Overall progression
+        depths = [m.depth for m in self.metrics]
+        qualities = [m.overall_quality for m in self.metrics]
+        
+        summary += "Quality Progression:\n"
+        for d, q in zip(depths, qualities):
+            summary += f"Depth {d}: {'=' * int(q * 20)} {q:.2f}\n"
+        
+        # Averages
+        avg_metrics = {
+            "Abstractness": np.mean([m.abstractness_score for m in self.metrics]),
+            "Novelty": np.mean([m.novelty_score for m in self.metrics]),
+            "Coherence": np.mean([m.coherence_score for m in self.metrics]),
+            "Practical Value": np.mean([m.practical_score for m in self.metrics])
+        }
+        
+        summary += "\nAverage Metrics:\n"
+        for metric, value in avg_metrics.items():
+            summary += f"{metric}: {value:.2f}\n"
+        
+        return summary
+    
     def add_thought(self, depth: int, thought: Dict):
         self.thoughts.append({
             "depth": depth,
@@ -276,6 +375,11 @@ def think(initial_thought: str, library: ThoughtLibrary = None):
                         for ref in tool_response['referenced_insights']:
                             print(f"- From {ref['session']}: {ref['insight']}")
                     
+                    # Calculate metrics for this thought
+                    metrics = thought_process.calculate_metrics(tool_response, depth)
+                    print(f"\nMetrics for depth {depth}:")
+                    print(metrics)
+
                     thought_process.add_thought(depth, tool_response)
                     
                     if tool_response["needs_more_thinking"]:
@@ -302,6 +406,9 @@ def think(initial_thought: str, library: ThoughtLibrary = None):
 if __name__ == "__main__":
     library = ThoughtLibrary()
     
+    # Try a new question that builds on both previous sessions
+    initial_thought = "How does artificial intelligence change our understanding of consciousness?"
+    
     print("\nAvailable thinking sessions:")
     for session in library.list_sessions():
         print(f"Timestamp: {session['timestamp']}")
@@ -309,7 +416,6 @@ if __name__ == "__main__":
         print(f"Depths: {session['total_depths']}")
         print("-" * 40)
     
-    initial_thought = "Can artificial intelligence have free will?"
     result = think(initial_thought, library)
     if result:
         print("\nFinal result:", result)
