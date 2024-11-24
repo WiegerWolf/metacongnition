@@ -136,6 +136,18 @@ def think(initial_thought: str, library: ThoughtLibrary = None):
     related_sessions = library.find_related_sessions(initial_thought)
     
     def recursive_think(thought: str, depth: int = 0, context: List[Dict] = None, total_tokens: int = 0):
+        # Add safety limits
+        MAX_TOKENS = 100000  # Lower than previous to be safe
+        MAX_DEPTH = 15      # Reasonable depth limit
+        
+        if total_tokens > MAX_TOKENS:
+            print(f"\nReached token limit ({MAX_TOKENS})")
+            return f"Stopping due to token limit. Final thought: {thought}"
+            
+        if depth >= MAX_DEPTH:
+            print(f"\nReached maximum depth ({MAX_DEPTH})")
+            return f"Stopping due to depth limit. Final thought: {thought}"
+
         if context is None:
             context = []
             # Add context about related sessions
@@ -144,12 +156,14 @@ def think(initial_thought: str, library: ThoughtLibrary = None):
                 for session in related_sessions:
                     context_text += f"\nFrom session {session['timestamp']}:\n"
                     context_text += f"Topic: {session['initial_thought']}\n"
-                    if session.get('thoughts'):  # Use .get() to avoid KeyError
+                    if session.get('thoughts'):
                         final_thought = session['thoughts'][-1]
                         context_text += f"Final conclusion: {final_thought['thought']}\n"
                         context_text += f"Key concepts: {', '.join(final_thought.get('key_concepts', []))}\n"
                 
                 context.append({"role": "user", "content": context_text})
+
+        # Modify tool description to encourage concrete conclusions
         tools = [
             {
                 "name": "continue_thinking",
@@ -157,6 +171,18 @@ def think(initial_thought: str, library: ThoughtLibrary = None):
                 A tool for recursive self-reflection and deep thinking about a given topic.
                 Use this tool when you need to explore a thought more deeply or when the current analysis feels incomplete.
                 Consider insights from previous thinking sessions when relevant.
+                
+                Guidelines for deciding if more thinking is needed:
+                1. Are there concrete, practical aspects still unexplored?
+                2. Would additional thinking lead to actionable insights?
+                3. Has the current line of thought reached a natural conclusion?
+                4. Are we moving from abstract to concrete understanding?
+                
+                Return needs_more_thinking=False when:
+                1. A comprehensive practical understanding has been reached
+                2. Further exploration would be redundant
+                3. The key questions have been answered with actionable insights
+                4. The analysis has moved from theory to practical application
                 """,
                 "input_schema": {
                     "type": "object",
@@ -192,15 +218,38 @@ def think(initial_thought: str, library: ThoughtLibrary = None):
                                 }
                             },
                             "description": "Insights from previous sessions that informed this thought"
+                        },
+                        "concrete_applications": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Practical applications or implications of this thought"
                         }
                     },
-                    "required": ["current_thought", "needs_more_thinking", "next_thought", "reasoning", 
-                            "key_concepts", "referenced_insights"]
+                    "required": [
+                        "current_thought", 
+                        "needs_more_thinking", 
+                        "next_thought", 
+                        "reasoning", 
+                        "key_concepts", 
+                        "referenced_insights",
+                        "concrete_applications"
+                    ]
                 }
             }
         ]
+
+        # Manage context window by keeping only recent depths
+        CONTEXT_WINDOW = 5  # Keep only last 5 depths of context
+        if len(context) > CONTEXT_WINDOW + 1:  # +1 for the initial related sessions context
+            context = [context[0]] + context[-CONTEXT_WINDOW:]
+
         # Add the current thought to context
-        context.append({"role": "user", "content": f"Depth {depth}: {thought}\nPlease think about this deeply and decide if more thinking is needed."})
+        context.append({
+            "role": "user", 
+            "content": f"""Depth {depth}: {thought}
+            Please think about this deeply and decide if more thinking is needed.
+            Focus on reaching practical, actionable conclusions rather than purely theoretical exploration."""
+        })
         
         try:
             message = client.messages.create(
