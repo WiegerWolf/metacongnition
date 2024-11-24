@@ -65,28 +65,27 @@ class ThoughtLibrary:
         
         messages = [
             {"role": "user", "content": f"""Given this query: '{query}'
-            Please analyze these previous thinking sessions and identify which might be relevant.
-            Return your response as a JSON array of timestamp strings.
-            Previous sessions:
-            {json.dumps(sessions, indent=2)}"""}
+             Please analyze these previous thinking sessions and identify which might be relevant.
+             Return only a JSON array of timestamp strings, nothing else.
+             Previous sessions:
+             {json.dumps(sessions, indent=2)}"""}
         ]
         
-        response = client.messages.create(
-            model="claude-3-5-sonnet-20241022",
-            max_tokens=1000,
-            messages=messages
-        )
-        
         try:
-            related_timestamps = json.loads(response.content[0].text)
-            related_sessions = []
-            for ts in related_timestamps:
-                session = self.get_session(ts)
-                if session:
-                    # Add timestamp to the session data
-                    session['timestamp'] = ts
-                    related_sessions.append(session)
-            return related_sessions
+            response = client.messages.create(
+                model="claude-3-5-sonnet-20241022",
+                max_tokens=1000,
+                messages=messages
+            )
+            
+            # Clean the response text to ensure it's valid JSON
+            response_text = response.content[0].text.strip()
+            # Remove any additional text before or after the JSON array
+            if '[' in response_text and ']' in response_text:
+                json_str = response_text[response_text.find('['):response_text.rfind(']')+1]
+                related_timestamps = json.loads(json_str)
+                return [self.get_session(ts) for ts in related_timestamps]
+            return []
         except Exception as e:
             print(f"Error finding related sessions: {e}")
             return []
@@ -111,38 +110,29 @@ class ThoughtProcess:
         self.concept_history = set()
 
     def calculate_metrics(self, thought: Dict, depth: int) -> ThinkingMetrics:
-        # Get LLM to evaluate the thought quality
-        evaluation_prompt = {
-            "role": "user",
-            "content": f"""Evaluate the following thought in terms of:
-            1. Abstractness (0-1, lower means more concrete)
-            2. Novelty (0-1, higher means more new concepts)
-            3. Coherence (0-1, higher means better connected to previous thoughts)
-            4. Practical Value (0-1, higher means more actionable insights)
-            
-            Thought: {thought['current_thought']}
-            Reasoning: {thought['reasoning']}
-            Key Concepts: {', '.join(thought['key_concepts'])}
-            Concrete Applications: {', '.join(thought.get('concrete_applications', []))}
-            
-            Return your evaluation as a JSON object with these exact keys:
-            {{"abstractness": float, "novelty": float, "coherence": float, "practical_value": float}}"""
-        }
-        
+        """Calculate metrics based on the thought content directly"""
         try:
-            response = client.messages.create(
-                model="claude-3-5-sonnet-20241022",
-                max_tokens=1000,
-                messages=[evaluation_prompt]
-            )
+            # Calculate abstractness based on presence of concrete examples
+            abstractness = 0.8 if not thought.get('concrete_applications') else 0.4
             
-            metrics_dict = json.loads(response.content[0].text)
+            # Calculate novelty based on new key concepts
+            current_concepts = set(thought['key_concepts'])
+            new_concepts = current_concepts - self.concept_history
+            self.concept_history.update(current_concepts)
+            novelty = len(new_concepts) / max(1, len(current_concepts))
+            
+            # Calculate coherence based on referenced insights
+            coherence = min(1.0, len(thought.get('referenced_insights', [])) * 0.25)
+            
+            # Calculate practical value based on concrete applications
+            practical = min(1.0, len(thought.get('concrete_applications', [])) * 0.2)
+            
             metrics = ThinkingMetrics(
                 depth=depth,
-                abstractness_score=metrics_dict["abstractness"],
-                novelty_score=metrics_dict["novelty"],
-                coherence_score=metrics_dict["coherence"],
-                practical_score=metrics_dict["practical_value"]
+                abstractness_score=abstractness,
+                novelty_score=novelty,
+                coherence_score=coherence,
+                practical_score=practical
             )
             
             self.metrics.append(metrics)
@@ -361,25 +351,23 @@ def think(initial_thought: str, library: ThoughtLibrary = None):
             total_tokens += message.usage.input_tokens + message.usage.output_tokens
             print(f"\nDepth {depth} response (Total tokens: {total_tokens}):")
             
-            # Handle the response
             for content in message.content:
                 if content.type == "tool_use":
                     tool_response = content.input
                     tool_response["tokens_at_depth"] = message.usage.input_tokens + message.usage.output_tokens
                     tool_response["total_tokens"] = total_tokens
                     
+                    # Calculate metrics without additional API call
+                    metrics = thought_process.calculate_metrics(tool_response, depth)
+                    if metrics:
+                        print(f"\nMetrics for depth {depth}:")
+                        print(metrics)
+                    
                     print(f"\nReasoning at depth {depth}: {tool_response['reasoning']}")
                     print(f"Key concepts at depth {depth}: {', '.join(tool_response['key_concepts'])}")
-                    if tool_response.get('referenced_insights'):
-                        print(f"Referenced insights at depth {depth}:")
-                        for ref in tool_response['referenced_insights']:
-                            print(f"- From {ref['session']}: {ref['insight']}")
+                    if tool_response.get('concrete_applications'):
+                        print(f"Concrete applications at depth {depth}: {', '.join(tool_response['concrete_applications'])}")
                     
-                    # Calculate metrics for this thought
-                    metrics = thought_process.calculate_metrics(tool_response, depth)
-                    print(f"\nMetrics for depth {depth}:")
-                    print(metrics)
-
                     thought_process.add_thought(depth, tool_response)
                     
                     if tool_response["needs_more_thinking"]:
