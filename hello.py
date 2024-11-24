@@ -127,76 +127,6 @@ class ThinkingMetrics:
             self.practical_score
         ])
 
-class ThoughtLibrary:
-    def __init__(self, base_dir="thought_sessions"):
-        self.base_dir = Path(base_dir)
-        self.base_dir.mkdir(parents=True, exist_ok=True)
-    
-    def list_sessions(self):
-        sessions = []
-        for session_dir in self.base_dir.glob("*"):
-            if session_dir.is_dir():
-                session_file = session_dir / "session.json"
-                if session_file.exists():
-                    with open(session_file) as f:
-                        data = json.load(f)
-                        sessions.append({
-                            "timestamp": session_dir.name,
-                            "initial_thought": data["initial_thought"],
-                            "total_depths": data["total_depths"],
-                            "final_tokens": data["final_tokens"]
-                        })
-        return sessions
-    
-    def find_related_sessions(self, query):
-        """Find sessions related to a given query/topic"""
-        sessions = self.list_sessions()
-        if not sessions:
-            return []
-        
-        messages = [
-            {"role": "user", "content": f"""Given this query: '{query}'
-             Please analyze these previous thinking sessions and identify which might be relevant.
-             Return only a JSON array of timestamp strings, nothing else.
-             Previous sessions:
-             {json.dumps(sessions, indent=2)}"""}
-        ]
-        
-        try:
-            response = client.messages.create(
-                model="claude-3-5-sonnet-20241022",
-                max_tokens=1000,
-                messages=messages
-            )
-            
-            # Clean the response text to ensure it's valid JSON
-            response_text = response.content[0].text.strip()
-            if '[' in response_text and ']' in response_text:
-                json_str = response_text[response_text.find('['):response_text.rfind(']')+1]
-                related_timestamps = json.loads(json_str)
-                related_sessions = []
-                for ts in related_timestamps:
-                    session = self.get_session(ts)
-                    if session:  # Only add if session was found
-                        related_sessions.append(session)
-                return related_sessions
-            return []
-        except Exception as e:
-            print(f"Error finding related sessions: {e}")
-            print(f"Response text was: {response_text}")
-            return []
-
-    def get_session(self, timestamp):
-        """Retrieve a specific thinking session and include its timestamp"""
-        session_file = self.base_dir / timestamp / "session.json"
-        if session_file.exists():
-            with open(session_file) as f:
-                session_data = json.load(f)
-                # Add the timestamp to the session data
-                session_data['timestamp'] = timestamp
-                return session_data
-        return None
-
 class EnhancedThoughtLibrary:
     def __init__(self, base_dir="thought_sessions"):
         self.base_dir = Path(base_dir)
@@ -419,13 +349,13 @@ class EnhancedThoughtLibrary:
             return ""
 
 class ThoughtProcess:
-    def __init__(self, initial_thought: str, library: ThoughtLibrary = None):
+    def __init__(self, initial_thought: str, library: EnhancedThoughtLibrary = None):
         self.initial_thought = initial_thought
         self.thoughts = []
         self.timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         self.session_dir = Path(f"thought_sessions/{self.timestamp}")
         self.session_dir.mkdir(parents=True, exist_ok=True)
-        self.library = library or ThoughtLibrary()
+        self.library = library or EnhancedThoughtLibrary()
         self.referenced_sessions = {}
         self.metrics = []
         self.concept_history = set()
@@ -539,9 +469,9 @@ class ThoughtProcess:
         
         return summary
 
-def think(initial_thought: str, library: ThoughtLibrary = None):
+def think(initial_thought: str, library: EnhancedThoughtLibrary = None):
     if library is None:
-        library = ThoughtLibrary()
+        library = EnhancedThoughtLibrary()
         
     thought_process = ThoughtProcess(initial_thought, library)
     
