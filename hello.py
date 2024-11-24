@@ -241,6 +241,8 @@ def think(initial_thought: str, library: ThoughtLibrary = None):
             print(f"Error during thinking process: {e}")
             return f"Error occurred: {str(e)}"
 
+    return recursive_think(initial_thought)
+
 if __name__ == "__main__":
     library = ThoughtLibrary()
     
