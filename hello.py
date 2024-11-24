@@ -737,6 +737,8 @@ if __name__ == "__main__":
     if related_concepts:
         print("Related concepts:", ", ".join(related_concepts))
     
+    # Create ThoughtProcess instance and run thinking
+    thought_process = ThoughtProcess(initial_thought, library)
     result = think(initial_thought, library)
     
     if result:
@@ -748,21 +750,18 @@ if __name__ == "__main__":
         
         # Create a new ThoughtSession
         session = ThoughtSession(timestamp, initial_thought)
-        
-        # Add the thoughts from the thinking process
-        session.thoughts = thought_process.thoughts  # Use the thoughts from our ThoughtProcess
+        session.thoughts = thought_process.thoughts
         
         # Save the session first
         library.save_session(session)
         
-        # Now update the knowledge graph
         print("\nExtracting concepts from session...")
         for thought in session.thoughts:
             print(f"\nProcessing thought at depth {thought['depth']}:")
-            print(f"Key concepts: {', '.join(thought['key_concepts'])}")
+            print(f"Key concepts: {', '.join(thought.get('key_concepts', []))}")
             
             # Create concepts for each key concept
-            for concept in thought['key_concepts']:
+            for concept in thought.get('key_concepts', []):
                 if concept not in library.knowledge_graph.graph:
                     print(f"Adding new concept: {concept}")
                     new_concept = Concept(
