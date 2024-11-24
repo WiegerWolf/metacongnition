@@ -3,13 +3,104 @@ import anthropic
 from datetime import datetime
 import json
 from pathlib import Path
-from typing import List, Dict, Tuple
 from dataclasses import dataclass
 import numpy as np
+from typing import List, Dict, Set, Optional
+import networkx as nx
 
 client = anthropic.Anthropic(
     api_key=os.environ["ANTHROPIC_API_KEY"],
 )
+
+@dataclass
+class Concept:
+    name: str
+    first_appearance: str  # timestamp
+    sessions: Set[str]     # timestamps where this concept appears
+    related_concepts: Set[str]
+    definition: str
+
+class KnowledgeGraph:
+    def __init__(self, base_dir: Path):
+        self.graph = nx.DiGraph()
+        self.base_dir = base_dir
+        self.concepts_file = base_dir / "concepts.json"
+        self.load_graph()
+    
+    def load_graph(self):
+        if self.concepts_file.exists():
+            with open(self.concepts_file) as f:
+                concepts_data = json.load(f)
+                for concept_name, data in concepts_data.items():
+                    self.graph.add_node(concept_name, **data)
+    
+    def save_graph(self):
+        concepts_data = {
+            node: self.graph.nodes[node] 
+            for node in self.graph.nodes
+        }
+        with open(self.concepts_file, 'w') as f:
+            json.dump(concepts_data, f, indent=2)
+    
+    def add_concept(self, concept: Concept):
+        self.graph.add_node(
+            concept.name,
+            first_appearance=concept.first_appearance,
+            sessions=list(concept.sessions),
+            related_concepts=list(concept.related_concepts),
+            definition=concept.definition
+        )
+        
+        # Add edges to related concepts
+        for related in concept.related_concepts:
+            if related in self.graph:
+                self.graph.add_edge(concept.name, related)
+                self.graph.add_edge(related, concept.name)
+    
+    def get_related_concepts(self, concept_name: str, depth: int = 2) -> Set[str]:
+        if concept_name not in self.graph:
+            return set()
+        
+        related = set()
+        current_level = {concept_name}
+        
+        for _ in range(depth):
+            next_level = set()
+            for concept in current_level:
+                neighbors = set(self.graph.neighbors(concept))
+                next_level.update(neighbors - related - {concept_name})
+            related.update(next_level)
+            current_level = next_level
+            
+        return related
+
+class ThoughtSession:
+    def __init__(self, timestamp: str, initial_thought: str):
+        self.timestamp = timestamp
+        self.initial_thought = initial_thought
+        self.thoughts = []
+        self.status = "active"  # active, paused, completed
+        self.branches = []  # list of related thought sessions
+        self.parent_session = None  # timestamp of parent session if this is a branch
+        
+    def to_dict(self) -> Dict:
+        return {
+            "timestamp": self.timestamp,
+            "initial_thought": self.initial_thought,
+            "thoughts": self.thoughts,
+            "status": self.status,
+            "branches": self.branches,
+            "parent_session": self.parent_session
+        }
+    
+    @classmethod
+    def from_dict(cls, data: Dict) -> 'ThoughtSession':
+        session = cls(data["timestamp"], data["initial_thought"])
+        session.thoughts = data["thoughts"]
+        session.status = data.get("status", "completed")
+        session.branches = data.get("branches", [])
+        session.parent_session = data.get("parent_session")
+        return session
 
 @dataclass
 class ThinkingMetrics:
@@ -105,6 +196,132 @@ class ThoughtLibrary:
                 session_data['timestamp'] = timestamp
                 return session_data
         return None
+
+class EnhancedThoughtLibrary:
+    def __init__(self, base_dir="thought_sessions"):
+        self.base_dir = Path(base_dir)
+        self.base_dir.mkdir(parents=True, exist_ok=True)
+        self.knowledge_graph = KnowledgeGraph(self.base_dir)
+        self.active_sessions = {}  # timestamp -> ThoughtSession
+        
+    def create_session(self, initial_thought: str, parent_session: str = None) -> ThoughtSession:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        session = ThoughtSession(timestamp, initial_thought)
+        if parent_session:
+            session.parent_session = parent_session
+            parent = self.get_session(parent_session)
+            if parent:
+                parent.branches.append(timestamp)
+                self.save_session(parent)
+        
+        self.active_sessions[timestamp] = session
+        return session
+    
+    def pause_session(self, timestamp: str):
+        session = self.active_sessions.get(timestamp)
+        if session:
+            session.status = "paused"
+            self.save_session(session)
+    
+    def resume_session(self, timestamp: str) -> Optional[ThoughtSession]:
+        session_file = self.base_dir / timestamp / "session.json"
+        if session_file.exists():
+            with open(session_file) as f:
+                data = json.load(f)
+                if data.get("status") == "paused":
+                    session = ThoughtSession.from_dict(data)
+                    session.status = "active"
+                    self.active_sessions[timestamp] = session
+                    return session
+        return None
+    
+    def suggest_new_thoughts(self, context: str = None) -> List[str]:
+        """Let the model suggest new thinking threads based on knowledge graph"""
+        # Get recent concepts and their relationships
+        recent_concepts = self.knowledge_graph.get_recent_concepts(5)
+        related_concepts = set()
+        for concept in recent_concepts:
+            related_concepts.update(
+                self.knowledge_graph.get_related_concepts(concept)
+            )
+        
+        prompt = f"""Based on these recent concepts and their relationships:
+        Recent concepts: {', '.join(recent_concepts)}
+        Related concepts: {', '.join(related_concepts)}
+        
+        Please suggest 3-5 new questions or topics that would be valuable to explore.
+        Consider:
+        1. Unexplored connections between concepts
+        2. Practical applications not yet discussed
+        3. Potential implications that need deeper analysis
+        
+        Return your suggestions as a JSON array of strings.
+        """
+        
+        try:
+            response = client.messages.create(
+                model="claude-3-5-sonnet-20241022",
+                max_tokens=1000,
+                messages=[{"role": "user", "content": prompt}]
+            )
+            
+            return json.loads(response.content[0].text)
+        except Exception as e:
+            print(f"Error suggesting new thoughts: {e}")
+            return []
+
+    def update_knowledge_graph(self, session: ThoughtSession):
+        """Update knowledge graph with concepts from a session"""
+        for thought in session.thoughts:
+            for concept in thought.get("key_concepts", []):
+                existing_concepts = set(self.knowledge_graph.graph.nodes)
+                
+                if concept not in existing_concepts:
+                    # Get concept definition from model
+                    definition = self._get_concept_definition(
+                        concept, 
+                        thought["thought"]
+                    )
+                    
+                    new_concept = Concept(
+                        name=concept,
+                        first_appearance=session.timestamp,
+                        sessions={session.timestamp},
+                        related_concepts=set(thought["key_concepts"]) - {concept},
+                        definition=definition
+                    )
+                    self.knowledge_graph.add_concept(new_concept)
+                else:
+                    # Update existing concept
+                    node = self.knowledge_graph.graph.nodes[concept]
+                    node["sessions"] = list(set(node["sessions"]) | {session.timestamp})
+                    node["related_concepts"] = list(
+                        set(node["related_concepts"]) | 
+                        set(thought["key_concepts"]) - {concept}
+                    )
+        
+        self.knowledge_graph.save_graph()
+
+    def _get_concept_definition(self, concept: str, context: str) -> str:
+        """Get a definition for a concept from the model"""
+        prompt = f"""Based on this context:
+        {context}
+        
+        Please provide a clear, concise definition of the concept: {concept}
+        Focus on how this concept is being used in the given context.
+        """
+        
+        try:
+            response = client.messages.create(
+                model="claude-3-5-sonnet-20241022",
+                max_tokens=1000,
+                messages=[{"role": "user", "content": prompt}]
+            )
+            
+            return response.content[0].text.strip()
+        except Exception as e:
+            print(f"Error getting concept definition: {e}")
+            return ""
 
 class ThoughtProcess:
     def __init__(self, initial_thought: str, library: ThoughtLibrary = None):
