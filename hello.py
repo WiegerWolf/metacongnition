@@ -422,7 +422,7 @@ class ThoughtProcess:
         return summary
     
     def add_thought(self, depth: int, thought: Dict):
-        # Ensure all required fields are present
+        # Create a properly structured thought with all necessary fields
         structured_thought = {
             "depth": depth,
             "thought": thought["current_thought"],
@@ -433,8 +433,14 @@ class ThoughtProcess:
             "total_tokens": thought.get("total_tokens", 0),
             "key_concepts": thought.get("key_concepts", []),
             "referenced_insights": thought.get("referenced_insights", []),
-            "concrete_applications": thought.get("concrete_applications", [])  # Add this
+            "concrete_applications": thought.get("concrete_applications", [])
         }
+        
+        # Print debug information
+        print(f"\nAdding thought at depth {depth}:")
+        print(f"Key concepts: {structured_thought['key_concepts']}")
+        print(f"Concrete applications: {structured_thought['concrete_applications']}")
+        
         self.thoughts.append(structured_thought)
         
     def save_session(self):
@@ -468,6 +474,66 @@ class ThoughtProcess:
             f.write(summary)
         
         return summary
+
+def update_knowledge_graph(library: EnhancedThoughtLibrary, session: ThoughtSession):
+    """Separate function to handle knowledge graph updates"""
+    timestamp = session.timestamp
+    all_concepts = set()
+    concept_definitions = {}
+    concept_relationships = {}
+    
+    print("\nExtracting concepts from session...")
+    
+    # First pass: collect all concepts and their contexts
+    for thought in session.thoughts:
+        depth = thought.get('depth', 0)
+        concepts = thought.get('key_concepts', [])
+        print(f"\nProcessing thought at depth {depth}:")
+        print(f"Key concepts: {', '.join(concepts)}")
+        
+        # Update all_concepts set
+        all_concepts.update(concepts)
+        
+        # Build relationships between concepts in the same thought
+        for concept in concepts:
+            if concept not in concept_relationships:
+                concept_relationships[concept] = set()
+            concept_relationships[concept].update(set(concepts) - {concept})
+            
+            # Get definition if we don't have it yet
+            if concept not in concept_definitions:
+                print(f"Getting definition for: {concept}")
+                concept_definitions[concept] = library._get_concept_definition(
+                    concept,
+                    thought['thought']
+                )
+    
+    print(f"\nTotal concepts found: {len(all_concepts)}")
+    
+    # Second pass: create or update concepts in the graph
+    for concept in all_concepts:
+        if concept not in library.knowledge_graph.graph:
+            print(f"\nAdding new concept: {concept}")
+            new_concept = Concept(
+                name=concept,
+                first_appearance=timestamp,
+                sessions={timestamp},
+                related_concepts=concept_relationships.get(concept, set()),
+                definition=concept_definitions.get(concept, "")
+            )
+            library.knowledge_graph.add_concept(new_concept)
+        else:
+            print(f"\nUpdating existing concept: {concept}")
+            node = library.knowledge_graph.graph.nodes[concept]
+            node['sessions'] = list(set(node['sessions']) | {timestamp})
+            node['related_concepts'] = list(
+                set(node['related_concepts']) | 
+                concept_relationships.get(concept, set())
+            )
+    
+    # Save the updated graph
+    library.knowledge_graph.save_graph()
+    return library.knowledge_graph
 
 def think(initial_thought: str, library: EnhancedThoughtLibrary = None):
     if library is None:
@@ -678,71 +744,25 @@ if __name__ == "__main__":
         print("\nFinal result:", result)
         print("\nUpdating knowledge graph...")
         
+        # Create and save session
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         session = ThoughtSession(timestamp, initial_thought)
         session.thoughts = thought_process.thoughts
-        
-        # Save the session first
         library.save_session(session)
         
-        print("\nExtracting concepts from session...")
-        all_concepts = set()
-        concept_definitions = {}
-        
-        # First pass: collect all concepts and their contexts
-        for thought in session.thoughts:
-            print(f"\nProcessing thought at depth {thought['depth']}:")
-            concepts = thought.get('key_concepts', [])
-            print(f"Key concepts: {', '.join(concepts)}")
-            
-            all_concepts.update(concepts)
-            
-            # Get definitions for new concepts
-            for concept in concepts:
-                if concept not in concept_definitions:
-                    print(f"Getting definition for: {concept}")
-                    concept_definitions[concept] = library._get_concept_definition(
-                        concept,
-                        thought['thought']
-                    )
-        
-        # Second pass: create or update concepts with all related information
-        for concept in all_concepts:
-            related_concepts = all_concepts - {concept}
-            
-            if concept not in library.knowledge_graph.graph:
-                print(f"Adding new concept: {concept}")
-                new_concept = Concept(
-                    name=concept,
-                    first_appearance=timestamp,
-                    sessions={timestamp},
-                    related_concepts=related_concepts,
-                    definition=concept_definitions.get(concept, "")
-                )
-                library.knowledge_graph.add_concept(new_concept)
-            else:
-                print(f"Updating existing concept: {concept}")
-                node = library.knowledge_graph.graph.nodes[concept]
-                node['sessions'] = list(set(node['sessions']) | {timestamp})
-                node['related_concepts'] = list(
-                    set(node['related_concepts']) | related_concepts
-                )
-        
-        # Save the updated knowledge graph
-        library.knowledge_graph.save_graph()
+        # Update knowledge graph
+        graph = update_knowledge_graph(library, session)
         
         # Print graph statistics
         print("\nKnowledge Graph Statistics:")
-        print(f"Number of concepts: {len(library.knowledge_graph.graph.nodes)}")
-        print(f"Number of relationships: {len(library.knowledge_graph.graph.edges)}")
+        print(f"Number of concepts: {len(graph.graph.nodes)}")
+        print(f"Number of relationships: {len(graph.graph.edges)}")
         
-        if library.knowledge_graph.graph.nodes:
+        if graph.graph.nodes:
             print("\nExample Concepts:")
-            for node in list(library.knowledge_graph.graph.nodes)[:5]:
+            for node in list(graph.graph.nodes)[:5]:
                 print(f"\nConcept: {node}")
-                node_data = library.knowledge_graph.graph.nodes[node]
+                node_data = graph.graph.nodes[node]
                 print(f"Definition: {node_data.get('definition', 'No definition available')}")
                 print(f"Related concepts: {', '.join(node_data.get('related_concepts', []))}")
                 print(f"Appears in sessions: {', '.join(node_data.get('sessions', []))}")
-    else:
-        print("\nError: No result generated")
