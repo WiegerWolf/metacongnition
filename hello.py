@@ -38,10 +38,10 @@ class ThoughtLibrary:
         
         messages = [
             {"role": "user", "content": f"""Given this query: '{query}'
-             Please analyze these previous thinking sessions and identify which might be relevant.
-             Return your response as a JSON array of timestamp strings.
-             Previous sessions:
-             {json.dumps(sessions, indent=2)}"""}
+            Please analyze these previous thinking sessions and identify which might be relevant.
+            Return your response as a JSON array of timestamp strings.
+            Previous sessions:
+            {json.dumps(sessions, indent=2)}"""}
         ]
         
         response = client.messages.create(
@@ -52,11 +52,18 @@ class ThoughtLibrary:
         
         try:
             related_timestamps = json.loads(response.content[0].text)
-            return [self.get_session(ts) for ts in related_timestamps]
+            related_sessions = []
+            for ts in related_timestamps:
+                session = self.get_session(ts)
+                if session:
+                    # Add timestamp to the session data
+                    session['timestamp'] = ts
+                    related_sessions.append(session)
+            return related_sessions
         except Exception as e:
             print(f"Error finding related sessions: {e}")
             return []
-        
+
     def get_session(self, timestamp):
         session_file = self.base_dir / timestamp / "session.json"
         if session_file.exists():
