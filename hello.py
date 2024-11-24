@@ -217,6 +217,56 @@ class EnhancedThoughtLibrary:
         self.active_sessions[timestamp] = session
         return session
     
+    def find_related_sessions(self, query):
+        """Find sessions related to a given query/topic"""
+        sessions = self.list_sessions()
+        if not sessions:
+            return []
+        
+        messages = [
+            {"role": "user", "content": f"""Given this query: '{query}'
+             Please analyze these previous thinking sessions and identify which might be relevant.
+             Return only a JSON array of timestamp strings, nothing else.
+             Previous sessions:
+             {json.dumps(sessions, indent=2)}"""}
+        ]
+        
+        try:
+            response = client.messages.create(
+                model="claude-3-5-sonnet-20241022",
+                max_tokens=1000,
+                messages=messages
+            )
+            
+            # Clean the response text to ensure it's valid JSON
+            response_text = response.content[0].text.strip()
+            if '[' in response_text and ']' in response_text:
+                json_str = response_text[response_text.find('['):response_text.rfind(']')+1]
+                related_timestamps = json.loads(json_str)
+                related_sessions = []
+                for ts in related_timestamps:
+                    session = self.get_session(ts)
+                    if session:  # Only add if session was found
+                        related_sessions.append(session)
+                return related_sessions
+            return []
+        except Exception as e:
+            print(f"Error finding related sessions: {e}")
+            print(f"Response text was: {response_text}")
+            return []
+    
+    def find_related_concepts(self, query: str) -> List[str]:
+        """Find concepts related to a query using the knowledge graph"""
+        # Get all concepts that appear in sessions related to the query
+        related_sessions = self.find_related_sessions(query)
+        related_concepts = set()
+        
+        for session in related_sessions:
+            for thought in session.get('thoughts', []):
+                related_concepts.update(thought.get('key_concepts', []))
+        
+        return list(related_concepts)
+    
     def list_sessions(self):
         """List all available thinking sessions"""
         sessions = []
@@ -680,6 +730,13 @@ if __name__ == "__main__":
     
     # Create a new thinking session
     initial_thought = "How does artificial intelligence change our understanding of consciousness?"
+    
+    # Find related concepts before starting new session
+    print("\nFinding related concepts from previous sessions...")
+    related_concepts = library.find_related_concepts(initial_thought)
+    if related_concepts:
+        print("Related concepts:", ", ".join(related_concepts))
+    
     result = think(initial_thought, library)
     
     if result:
@@ -716,7 +773,3 @@ if __name__ == "__main__":
                 # Try getting related concepts for a key concept
                 key_concept = list(library.knowledge_graph.graph.nodes)[0]
                 related = library.knowledge_graph.get_related_concepts(key_concept)
-                print(f"\nConcepts related to '{key_concept}':")
-                print(', '.join(related))
-    else:
-        print("\nError: No result generated")
